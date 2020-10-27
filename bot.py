@@ -1,4 +1,3 @@
-import collections
 import math
 import os
 import telebot
@@ -9,7 +8,6 @@ from work_music import get_links, download_music_link, get_music_csv, create_csv
 from telebot.types import File
 bot = telebot.TeleBot("1389559561:AAGbQ0mIBnptbQ4-XCvqKLlNMN-szSIhyxI")
 
-Song = collections.namedtuple('Song', ['link', 'title', 'mark', 'pos'])
 
 class Setup:
     def __init__(self):
@@ -30,16 +28,12 @@ class Setup:
                 self.config = json.load(r_file)
         self.users_for_promoting = self.config['usersForPromoting']
         self.count_music = self.config['countMusic']
-        self.count_rows = self.config['countRows']
-        self.current_page = self.config['currentPage']
         self.songs = self.config['songs']
-        self.voted_users = self.config['votedUsers']
-        self.current_idx = self.config['currentIdx']
-        self.max_page = math.ceil(self.count_music / self.count_rows)
         self.poll_started = self.config['pollStarted']
         self.message_id = self.config['messageId']
         self.poll_id = self.config['pollId']
         self.chat_id = self.config['chatId']
+        self.upload_flag = self.config['uploadFlag']
 
     def get_songs(self,):
         self.songs = get_music_csv(self.FILENAME)
@@ -77,24 +71,34 @@ def update_poll_message():
     bot.edit_message_text(music_poll, setup.chat_id, setup.poll_id)
 
 
+def upload_song(link):
+    if setup.upload_flag:
+        download_music_link(link)
+        audio = open('song.mp3', 'rb')
+        bot.send_audio(setup.chat_id, audio)
+        os.remove('song.mp3')
+
+
 @bot.message_handler(commands=['vote'])
 def vote_for_song(message):
     if setup.poll_started:
         try:
             idx = int(re.search(r'^/vote ([\d]*)$', message.text).group(1)) - 1
         except AttributeError:
-            bot.send_message(setup.chat_id, '/help@DrakeChronoSilviumBot')
+            bot.send_message(setup.chat_id, '/help')
         else:
             if idx > setup.count_music:
                 bot.send_message(setup.chat_id, f'Type {setup.count_music} > number > 0')
-            elif (message.from_user.id, str(idx)) not in setup.voted_users:
+            elif message.from_user.id not in setup.songs[idx]["votedUsers"]:
                 song_item = setup.songs[idx]
-                setup.songs[idx]["mark"] = song_item["mark"] + 1
-                setup.voted_users.append((message.from_user.id, str(idx)))
+                song_item["mark"] += 1
+                song_item["votedUsers"].append(message.from_user.id)
+                setup.songs[idx] = song_item
             else:
                 song_item = setup.songs[idx]
-                setup.songs[idx]["mark"] = song_item.mark + 1
-                setup.voted_users.pop(setup.voted_users.index((message.from_user.id, str(idx))))
+                song_item["mark"] -= 1
+                song_item["votedUsers"].pop(song_item["votedUsers"].index(message.from_user.id))
+                setup.songs[idx] = song_item
     else:
         bot.send_message(message.chat.id, "poll hasn't started yet. Type /disco to start")
 
@@ -106,10 +110,24 @@ def get_help(message):
             "/finish to end poll (Admin only)\n"
             "/top [num] output top songs(e.g. /top or top 5) \n"
             "/vote [num] vote for song from poll (e.g. /vote or /vote 5) \n"
-            "/setDJ [mentioned user] (e.g. /setDJ @Admin) (Admin only)\n"
+            "/setDJ [mentioned user] set mentioned people a DJ (e.g. /setDJ @Admin) (Admin only)\n"
+            "/settings mp3 on|off"
     )
     bot.send_message(message.chat.id, help_message)
 
+
+@bot.message_handler(commands=['settings'])
+def change_upload_flag(message):
+    if message.text == '/settings mp3':
+        setup.upload_flag = False if setup.upload_flag else True
+    else:
+        switch = message.text.replace('/settings mp3', '').split()[0]
+        if switch == 'on':
+            setup.upload_flag = True
+        elif switch == 'off':
+            setup.upload_flag = False
+    bot_message = f"uploading songs is {'Enabled' if setup.upload_flag else 'Disabled'}"
+    bot.send_message(setup.chat_id, bot_message)
 
 @bot.message_handler(commands=['disco'])
 def create_poll(message):
@@ -120,7 +138,7 @@ def create_poll(message):
             setup.poll_started = True
             music_poll = ''
             for idx, song in enumerate(setup.songs):
-                music_poll += f'{setup.current_idx + idx}. {song["title"]}\n'
+                music_poll += f'{idx + 1}. {song["title"]} | {song["author"]}\n'
             poll = bot.send_message(message.chat.id, music_poll)
             setup.message_id = poll.message_id
             setup.chat_id = poll.chat.id
@@ -133,7 +151,6 @@ def create_poll(message):
 def finish_poll(message):
     if setup.poll_started:
         bot.unpin_chat_message(setup.chat_id)
-        setup.make_default_setup()
     else:
         bot.send_message(setup.chat_id, "poll hasn't started yet. Type /poll to start")
 
@@ -161,7 +178,7 @@ def pop_element_from_top(message):
     if check_admin_permissions(message):
         if setup.poll_started:
             try:
-                if message.text == '/poptop@DrakeChronoSilviumBot':  # оставить /poptop
+                if message.text == '/poptop':
                     idx = 0
                 else:
                     idx = int(re.search(r'^/poptop ([\d]*)$', message.text).group(1)) - 1
@@ -169,27 +186,18 @@ def pop_element_from_top(message):
                 bot.send_message(setup.chat_id, 'Incorrect input')
                 return None
             else:
-                if idx < 0 or idx > setup.count_music:
-                    bot.send_message(setup.chat_id, f'Type {setup.count_music} > number > 0')
+                if idx > setup.count_music:
+                    bot.send_message(setup.chat_id, f'Type {setup.count_music} > number')
                     return None
-            is_changed = False
             top_list = setup.songs.copy()
             top_list.sort(key=lambda song: song["mark"], reverse=True)
-            download_music_link(top_list[idx].link)
-            audio = open('song.mp3', 'rb')
-            bot.send_audio(message.chat.id, audio)
-            os.remove('song.mp3')
-            vote_remove_index_list = []
-            for index, vote in enumerate(setup.voted_users):
-                if vote[1] == top_list[idx].pos:  # vote[1] = song position
-                    vote_remove_index_list.append(index)
-                    song_item = setup.songs[int(vote[1])]
-                    setup.songs[int(vote[1])] = song_item._replace(mark=0)
-                    is_changed = True
-            if is_changed:
-                for index in vote_remove_index_list:
-                    setup.voted_users.pop(index)
-                bot.edit_message_reply_markup(setup.chat_id, setup.poll_id, reply_markup=gen_markup())
+            upload_song(top_list[idx]["link"])
+            song_index = top_list[idx]["pos"] - 1  # positions of songs starts by 1
+            song_item = setup.songs[song_index]
+            song_item["votedUsers"] = []
+            song_item["mark"] = 0
+            print(song_item)
+            setup.songs[song_index] = song_item
         else:
             bot.send_message(message.chat.id, "poll hasn't started yet. Type /poll to start")
     else:
@@ -202,7 +210,7 @@ def set_dj_by_user_id(message):
         try:
             mentioned_user = re.search(r'^/setDJ @([\w]*)', message.text).group(1)
         except AttributeError:
-            bot.send_message(message.chat.id, '/help@DrakeChronoSilviumBot') # Оставить /help
+            bot.send_message(message.chat.id, '/help')
         else:
             setup.users_for_promoting.append(mentioned_user)
             bot.send_message(message.chat.id, f'@{mentioned_user} type /becomeDJ. It\'s privileges only for you ^_^')
@@ -222,4 +230,7 @@ def become_dj(message):
 
 
 if __name__ == "__main__":
-    bot.polling(none_stop=True)
+    try:
+        bot.polling(none_stop=True)
+    except Exception:
+        print('I\'m here')
