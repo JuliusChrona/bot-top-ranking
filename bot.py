@@ -4,23 +4,30 @@ import os
 import telebot
 import re
 import json
-
-from work_music import get_links, download_music_link, get_music_csv
-
+from datetime import datetime
+from work_music import get_links, download_music_link, get_music_csv, create_csv
+from telebot.types import File
 bot = telebot.TeleBot("1389559561:AAGbQ0mIBnptbQ4-XCvqKLlNMN-szSIhyxI")
 
 Song = collections.namedtuple('Song', ['link', 'title', 'mark', 'pos'])
 
-
 class Setup:
     def __init__(self):
+        self.FILENAME = "music.csv"
         self.config = {}
         self.loads_config()
+        create_csv(self.FILENAME,self.count_music)
         self.get_songs()
 
     def loads_config(self):
-        with open("config.json") as r_file:
-            self.config = json.load(r_file)
+        if os.path.exists('saved_config.json'):
+            with open("saved_config.json") as r_file:
+                print("Load from exists")
+                self.config = json.load(r_file)
+        else:
+            with open("config.json") as r_file:
+                print("Load from default settings")
+                self.config = json.load(r_file)
         self.users_for_promoting = self.config['usersForPromoting']
         self.count_music = self.config['countMusic']
         self.count_rows = self.config['countRows']
@@ -34,12 +41,29 @@ class Setup:
         self.poll_id = self.config['pollId']
         self.chat_id = self.config['chatId']
 
-    def get_songs(self):
-        self.songs = get_music_csv("songs.csv")
+    def get_songs(self,):
+        self.songs = get_music_csv(self.FILENAME)
+
+    def save_config(self):
+        with open(f'saved_config.json',"w") as w_file:
+            print("hello")
+            data = {
+                "chatId" : self.chat_id,
+                "messageId": self.message_id,
+                "pollId" : self.poll_id,
+                "countMusic": self.count_music,
+                "votedUsers": self.voted_users,
+                "usersForPromoting": self.users_for_promoting,
+                "countRows": self.count_rows,
+                "currentPage" : self.current_page,
+                "songs" : self.songs,
+                "currentIdx": self.current_idx,
+                "pollStarted": self.poll_started
+            }
+            json.dump(data, w_file)
 
 
 setup = Setup()
-
 
 def check_admin_permissions(message):
     admins_id = [admin.user.id for admin in bot.get_chat_administrators(message.chat.id)]
@@ -65,11 +89,11 @@ def vote_for_song(message):
                 bot.send_message(setup.chat_id, f'Type {setup.count_music} > number > 0')
             elif (message.from_user.id, str(idx)) not in setup.voted_users:
                 song_item = setup.songs[idx]
-                setup.songs[idx] = song_item._replace(mark=song_item.mark + 1)
+                setup.songs[idx]["mark"] = song_item["mark"] + 1
                 setup.voted_users.append((message.from_user.id, str(idx)))
             else:
                 song_item = setup.songs[idx]
-                setup.songs[idx] = song_item._replace(mark=song_item.mark - 1)
+                setup.songs[idx]["mark"] = song_item.mark + 1
                 setup.voted_users.pop(setup.voted_users.index((message.from_user.id, str(idx))))
     else:
         bot.send_message(message.chat.id, "poll hasn't started yet. Type /disco to start")
